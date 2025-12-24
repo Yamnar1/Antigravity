@@ -33,7 +33,8 @@ const API = {
         try {
             const response = await fetch(`${this.baseURL}/csrf-token`, {
                 method: 'GET',
-                headers: { 'Accept': 'application/json' }
+                headers: { 'Accept': 'application/json' },
+                credentials: 'include' // Required to receive/send cookies
             });
             const data = await response.json();
             if (data.csrfToken) {
@@ -69,19 +70,22 @@ const API = {
     async request(endpoint, options = {}) {
         const method = options.method || 'GET';
         try {
-            const response = await fetch(`${this.baseURL}${endpoint}`, {
+            const fetchOptions = {
                 ...options,
-                headers: this.getHeaders(method)
-            });
+                headers: this.getHeaders(method),
+                credentials: 'include' // Required for cross-site cookies
+            };
+
+            const response = await fetch(`${this.baseURL}${endpoint}`, fetchOptions);
 
             // If we get a 403 Forbidden (likely CSRF error), try to refresh token once
             if (response.status === 403 && endpoint !== '/csrf-token') {
                 await this.fetchCsrfToken();
+                // Update headers with new CSRF token
+                fetchOptions.headers = this.getHeaders(method);
+
                 // Retry request with new token
-                const retryResponse = await fetch(`${this.baseURL}${endpoint}`, {
-                    ...options,
-                    headers: this.getHeaders(method)
-                });
+                const retryResponse = await fetch(`${this.baseURL}${endpoint}`, fetchOptions);
                 const data = await retryResponse.json();
                 if (!retryResponse.ok) throw new Error(data.message || 'Error en la petición');
                 return data;
