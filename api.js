@@ -7,9 +7,10 @@ const API = {
         ? 'http://localhost:3000/api'
         : 'https://antigravity-qub9.onrender.com/api',
     token: null,
+    csrfToken: null,
 
     // Initialize - load token from localStorage
-    init() {
+    async init() {
         this.token = this.getToken();
 
         // Auto-logout if token expired
@@ -18,13 +19,42 @@ const API = {
             localStorage.removeItem('currentUser');
             this.token = null;
         }
+
+        // Fetch CSRF token on init
+        try {
+            await this.fetchCsrfToken();
+        } catch (e) {
+            console.error('Failed to fetch CSRF token:', e);
+        }
     },
 
-    // Set authorization header
-    getHeaders() {
+    // Fetch CSRF token from server
+    async fetchCsrfToken() {
+        try {
+            const response = await fetch(`${this.baseURL}/csrf-token`, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await response.json();
+            if (data.csrfToken) {
+                this.csrfToken = data.csrfToken;
+            }
+        } catch (error) {
+            console.error('Error fetching CSRF token:', error);
+        }
+    },
+
+    // Set authorization and CSRF headers
+    getHeaders(method = 'GET') {
         const headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         };
+
+        // Add CSRF token for state-changing requests
+        if (method !== 'GET' && method !== 'HEAD' && this.csrfToken) {
+            headers['X-CSRF-Token'] = this.csrfToken;
+        }
 
         // Use getToken() to ensure we're getting a valid, non-expired token
         const validToken = this.getToken();
@@ -37,11 +67,25 @@ const API = {
 
     // Generic request method
     async request(endpoint, options = {}) {
+        const method = options.method || 'GET';
         try {
             const response = await fetch(`${this.baseURL}${endpoint}`, {
                 ...options,
-                headers: this.getHeaders()
+                headers: this.getHeaders(method)
             });
+
+            // If we get a 403 Forbidden (likely CSRF error), try to refresh token once
+            if (response.status === 403 && endpoint !== '/csrf-token') {
+                await this.fetchCsrfToken();
+                // Retry request with new token
+                const retryResponse = await fetch(`${this.baseURL}${endpoint}`, {
+                    ...options,
+                    headers: this.getHeaders(method)
+                });
+                const data = await retryResponse.json();
+                if (!retryResponse.ok) throw new Error(data.message || 'Error en la petición');
+                return data;
+            }
 
             const data = await response.json();
 
@@ -95,9 +139,10 @@ const API = {
         if (!tokenStr) return true;
 
         try {
+            // Try to parse as JSON (new format)
             const tokenData = JSON.parse(tokenStr);
 
-            // Old format (just string) - treat as expired to force re-login
+            // If it's just a string (old format), treat as expired to force re-login
             if (typeof tokenData === 'string') {
                 return true;
             }
@@ -110,7 +155,8 @@ const API = {
 
             return false;
         } catch (e) {
-            console.error('Invalid token format');
+            // If it's not valid JSON, it might be an old raw token string
+            // Treat as expired to force a clean state
             return true;
         }
     },
@@ -123,7 +169,7 @@ const API = {
         try {
             const tokenData = JSON.parse(tokenStr);
 
-            // Old format compatibility
+            // Old format compatibility (if it was a JSON-encoded string)
             if (typeof tokenData === 'string') {
                 return tokenData;
             }
@@ -135,7 +181,8 @@ const API = {
 
             return tokenData.token;
         } catch (e) {
-            return null;
+            // If it's not JSON, it's likely an old raw token string
+            return tokenStr;
         }
     },
 

@@ -49,8 +49,8 @@ router.post('/login', async (req, res) => {
         // Set HttpOnly cookie (NEW - for enhanced security)
         res.cookie('authToken', token, {
             httpOnly: true,  // Cannot be accessed via JavaScript
-            secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-            sameSite: 'strict', // CSRF protection
+            secure: true,    // Required for sameSite: 'none'
+            sameSite: 'none', // Required for cross-site (Netlify -> Render)
             maxAge: 8 * 60 * 60 * 1000 // 8 hours (matches token expiration)
         });
 
@@ -103,8 +103,8 @@ router.post('/logout', authenticate, (req, res) => {
     // Clear the HttpOnly cookie
     res.clearCookie('authToken', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict'
+        secure: true,
+        sameSite: 'none'
     });
 
     res.json({

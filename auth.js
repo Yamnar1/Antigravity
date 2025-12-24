@@ -5,8 +5,8 @@
 const Auth = {
   // Initialize
   init() {
-    // Check if we have a token
-    const token = localStorage.getItem('authToken');
+    // Check if we have a token using the API helper
+    const token = API.getToken();
     if (token) {
       API.token = token;
     }

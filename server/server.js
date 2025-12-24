@@ -19,21 +19,40 @@ app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(cookieParser()); // Parse cookies
 
-// CORS - Allow credentials (for cookies)
-// CORS - Allow credentials (for cookies)
+// CORS Configuration
+const allowedOrigins = [
+    'http://localhost:5500',
+    'http://127.0.0.1:5500',
+    'http://localhost:3000',
+    'https://vpfs.netlify.app'
+];
+
 app.use(cors({
-    origin: ['http://localhost:5500', 'http://127.0.0.1:5500', 'https://vpfs.netlify.app'],
-    credentials: true, // Allow cookies
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token']
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.netlify.app')) {
+            callback(null, true);
+        } else {
+            console.log('CORS blocked for origin:', origin);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'Accept']
 }));
+
+// Trust proxy (required for Render/Netlify to handle secure cookies correctly)
+app.set('trust proxy', 1);
 
 // CSRF Protection (after cookie-parser)
 const csrfProtection = csrf({
     cookie: {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict'
+        secure: true, // Always true for cross-site cookies
+        sameSite: 'none' // Required for cross-site cookies (Netlify -> Render)
     }
 });
 
@@ -66,6 +85,9 @@ app.use(express.static(path.join(__dirname, '../')));
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '../index.html'));
 });
+
+// Handle favicon.ico to avoid 404s
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // Routes
 app.use('/api/auth', authRoutes);
