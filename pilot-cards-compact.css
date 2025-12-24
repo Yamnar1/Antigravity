@@ -1,0 +1,52 @@
+/* Tarjetas más compactas para el módulo de pilotos */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    /* 5 columnas en una línea */
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    padding: 1rem !important;
+    /* Menos padding */
+    min-height: auto !important;
+}
+
+.stat-icon {
+    font-size: 1.8rem !important;
+    /* Ícono más pequeño */
+    margin-bottom: 0.5rem !important;
+}
+
+.stat-label {
+    font-size: 0.75rem !important;
+    /* Texto más pequeño */
+    margin-bottom: 0.3rem !important;
+}
+
+.stat-value {
+    font-size: 1.5rem !important;
+    /* Número más pequeño */
+}
+
+/* Responsive: En pantallas medianas, 3 columnas */
+@media (max-width: 1200px) {
+    .stats-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Responsive: En pantallas pequeñas, 2 columnas */
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Responsive: En pantallas muy pequeñas, 1 columna */
+@media (max-width: 480px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}

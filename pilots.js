@@ -1,0 +1,991 @@
+// ===================================
+// PILOT MANAGEMENT MODULE (API Version with Permissions)
+// ===================================
+
+const Pilots = {
+  // Get all pilots from API
+  async getAll() {
+    try {
+      const result = await API.getPilots();
+      return result.success ? result.pilots : [];
+    } catch (error) {
+      console.error('Error getting pilots:', error);
+      return [];
+    }
+  },
+
+  // Get statistics from API
+  async getStats() {
+    try {
+      const result = await API.getPilotStats();
+      if (result.success) {
+        const stats = result.stats;
+        // Compatibility with old server version
+        if (stats.expiredLicense === undefined) {
+          stats.expiredLicense = 0; // Default to 0 to avoid undefined
+        }
+        if (stats.expiredMedical === undefined) {
+          stats.expiredMedical = 0;
+        }
+        return stats;
+      }
+      return { total: 0, expiredLicense: 0, expiredMedical: 0, alerts: 0 };
+    } catch (error) {
+      console.error('Error getting stats:', error);
+      return { total: 0, expiredLicense: 0, expiredMedical: 0, alerts: 0 };
+    }
+  },
+
+  // Create new pilot
+  async create(data) {
+    try {
+      const result = await API.createPilot(data);
+      return result;
+    } catch (error) {
+      return { success: false, message: error.message || 'Error al crear piloto' };
+    }
+  },
+
+  // Update pilot
+  async update(id, data) {
+    try {
+      const result = await API.updatePilot(id, data);
+      return result;
+    } catch (error) {
+      return { success: false, message: error.message || 'Error al actualizar piloto' };
+    }
+  },
+
+  // Delete pilot
+  // Delete pilot
+  async delete(id) {
+    try {
+      const result = await API.deletePilot(id);
+      return result;
+    } catch (error) {
+      return { success: false, message: error.message || 'Error al eliminar piloto' };
+    }
+  },
+
+  // Check certificate status
+  getCertStatus(expiryDate) {
+    if (!expiryDate) return { status: 'unknown', class: 'badge-info', text: 'No Especificado' };
+
+    const today = new Date();
+    // Reset to UTC midnight
+    today.setUTCHours(0, 0, 0, 0);
+
+    // Parse expiry date as UTC
+    const expiryParts = expiryDate.split('-');
+    const expiry = new Date(Date.UTC(expiryParts[0], expiryParts[1] - 1, expiryParts[2]));
+
+    const daysUntilExpiry = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilExpiry < 0) {
+      return { status: 'expired', class: 'badge-danger', text: 'Vencido' };
+    } else if (daysUntilExpiry <= 30) {
+      return { status: 'expiring', class: 'badge-warning', text: `Por Vencer (${daysUntilExpiry}d)` };
+    } else {
+      return { status: 'valid', class: 'badge-success', text: 'Vigente' };
+    }
+  },
+
+  // Search pilot by name or ID (with audit)
+  async searchPilot() {
+    const searchInput = document.getElementById('pilotSearch');
+    const query = searchInput.value.trim();
+
+    if (!query) {
+      App.showAlert('warning', 'Ingrese un nombre o cédula para buscar');
+      return;
+    }
+
+    try {
+      const result = await API.request(`/pilots/search/${encodeURIComponent(query)}`);
+
+      if (result.success && result.pilot) {
+        this.displayFilteredPilots([result.pilot]);
+        App.showAlert('success', `Piloto encontrado: ${result.pilot.name}`);
+      }
+    } catch (error) {
+      // Don't clutter console with expected "not found" errors
+      // User already gets visual feedback via alert
+      App.showAlert('danger', 'Piloto no encontrado');
+      this.displayFilteredPilots([]);
+    }
+  },
+
+  // Clear search and show all pilots
+  async clearSearch() {
+    const searchInput = document.getElementById('pilotSearch');
+    searchInput.value = '';
+
+    const pilots = await this.getAll();
+    this.displayFilteredPilots(pilots);
+    App.showAlert('info', 'Búsqueda limpiada');
+  },
+
+  // Filter pilots by type
+  async filterPilotsByType(filterType) {
+    const pilots = await this.getAll();
+    let filtered = [];
+    let message = '';
+
+    switch (filterType) {
+      case 'license':
+        filtered = pilots.filter(p => this.getCertStatus(p.license_expiry).status === 'expired');
+        message = `Mostrando ${filtered.length} piloto(s) con licencia vencida`;
+        break;
+      case 'medical':
+        filtered = pilots.filter(p => this.getCertStatus(p.medical_expiry).status === 'expired');
+        message = `Mostrando ${filtered.length} piloto(s) con médico vencido`;
+        break;
+      case 'ratings':
+        filtered = pilots.filter(p => {
+          const ratingInfo = this.getClosestRatingExpiry(p);
+          return ratingInfo.status.status === 'expired';
+        });
+        message = `Mostrando ${filtered.length} piloto(s) con habilitaciones vencidas`;
+        break;
+      case 'alerts':
+        filtered = pilots.filter(p => {
+          const hasExpiredLicense = this.getCertStatus(p.license_expiry).status === 'expired';
+          const hasExpiredMedical = this.getCertStatus(p.medical_expiry).status === 'expired';
+          const ratingInfo = this.getClosestRatingExpiry(p);
+          const hasExpiredRatings = ratingInfo.status.status === 'expired';
+          return hasExpiredLicense || hasExpiredMedical || hasExpiredRatings;
+        });
+        message = `Mostrando ${filtered.length} piloto(s) con alertas`;
+        break;
+      case 'all':
+      default:
+        filtered = pilots;
+        message = `Mostrando todos los pilotos (${filtered.length})`;
+        break;
+    }
+
+    this.displayFilteredPilots(filtered);
+    App.showAlert('info', message);
+  },
+
+  // Get the closest rating expiry from all 20 ratings
+  getClosestRatingExpiry(pilot) {
+    const ratingFields = [
+      { name: 'aircraft_rating_1', expiry: 'aircraft_rating_1_expiry' },
+      { name: 'aircraft_rating_2', expiry: 'aircraft_rating_2_expiry' },
+      { name: 'aircraft_rating_3', expiry: 'aircraft_rating_3_expiry' },
+      { name: 'aircraft_rating_4', expiry: 'aircraft_rating_4_expiry' },
+      { name: 'aircraft_rating_5', expiry: 'aircraft_rating_5_expiry' },
+      { name: 'aircraft_rating_6', expiry: 'aircraft_rating_6_expiry' },
+      { name: 'aircraft_rating_7', expiry: 'aircraft_rating_7_expiry' },
+      { name: 'aircraft_rating_8', expiry: 'aircraft_rating_8_expiry' },
+      { name: 'aircraft_rating_9', expiry: 'aircraft_rating_9_expiry' },
+      { name: 'aircraft_rating_10', expiry: 'aircraft_rating_10_expiry' },
+      { name: 'IFR', expiry: 'ifr_rating_expiry' },
+      { name: 'Comp. Lingüística', expiry: 'language_proficiency_expiry' },
+      { name: 'Vuelo Nocturno', expiry: 'night_rating_expiry' },
+      { name: 'Multi-Motor', expiry: 'multi_engine_rating_expiry' },
+      { name: 'Formación', expiry: 'formation_rating_expiry' },
+      { name: 'Instructor', expiry: 'instructor_rating_expiry' },
+      { name: 'Otra', expiry: 'other_rating_expiry' },
+      { name: 'Otra 2', expiry: 'other_rating_2_expiry' },
+      { name: 'Otra 3', expiry: 'other_rating_3_expiry' },
+      { name: 'Otra 4', expiry: 'other_rating_4_expiry' }
+    ];
+
+    let closestRating = null;
+    let closestDate = null;
+    let smallestDiff = Infinity;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (const field of ratingFields) {
+      const expiryDate = pilot[field.expiry];
+      if (!expiryDate) continue;
+
+      const expiry = new Date(expiryDate);
+      expiry.setHours(0, 0, 0, 0);
+
+      const diff = expiry - today;
+
+      // Priorizar habilitaciones vencidas o próximas a vencer
+      if (Math.abs(diff) < Math.abs(smallestDiff) || (diff < 0 && smallestDiff > 0)) {
+        smallestDiff = diff;
+        closestDate = expiryDate;
+        // Para aircraft_rating_X usar el nombre del tipo de aeronave
+        if (field.name.startsWith('aircraft_rating_')) {
+          const ratingName = pilot[field.name.replace('_expiry', '')];
+          closestRating = ratingName || field.name;
+        } else {
+          closestRating = field.name;
+        }
+      }
+    }
+
+    if (!closestRating) {
+      return { name: '-', date: '-', status: { text: 'Sin Datos', class: 'badge-secondary' } };
+    }
+
+    const status = this.getCertStatus(closestDate);
+    return { name: closestRating, date: closestDate, status };
+  },
+
+  // Display filtered pilots list
+  displayFilteredPilots(pilots) {
+    const tbody = document.getElementById('pilotTableBody');
+    if (!tbody) return;
+
+    const canEdit = Auth.hasAnyPermission(
+      PERMISSIONS.MANAGE_PILOT_BASIC,
+      PERMISSIONS.MANAGE_PILOT_LICENSE,
+      PERMISSIONS.MANAGE_PILOT_MEDICAL
+    );
+    const canDelete = Auth.hasPermission(PERMISSIONS.DELETE_PILOT);
+
+    if (pilots.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align: center;">No se encontraron pilotos</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = pilots.map(p => {
+      const licenseStatus = this.getCertStatus(p.license_expiry);
+      const medicalStatus = this.getCertStatus(p.medical_expiry);
+      const ratingInfo = this.getClosestRatingExpiry(p);
+
+      return `
+        <tr>
+          <td><strong>${SecurityUtils.escapeHtml(p.name)}</strong></td>
+          <td>${SecurityUtils.escapeHtml(p.id_number)}</td>
+          <td>${SecurityUtils.escapeHtml(p.license_number)} (${SecurityUtils.escapeHtml(p.license_type)})</td>
+          <td><span class="badge ${licenseStatus.class}">${licenseStatus.text}</span></td>
+          <td>${SecurityUtils.escapeHtml(p.medical_cert) || '-'}</td>
+          <td><span class="badge ${medicalStatus.class}">${medicalStatus.text}</span></td>
+          <td>${SecurityUtils.escapeHtml(ratingInfo.name)}</td>
+          <td><span class="badge ${ratingInfo.status.class}">${ratingInfo.status.text}</span></td>
+          ${canEdit || canDelete ? `
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="Pilots.showViewModal(${p.id})">👁️ Ver</button>
+              ${canEdit ? `<button class="btn btn-sm btn-secondary" onclick="Pilots.showEditModal(${p.id})">✏️ Editar</button>` : ''}
+              ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="Pilots.confirmDelete(${p.id})">🗑️ Eliminar</button>` : ''}
+            </td>
+          ` : ''}
+        </tr>
+      `;
+    }).join('');
+  },
+
+  // Render pilots list
+  renderList() {
+    const canCreate = Auth.hasPermission(PERMISSIONS.CREATE_PILOT);
+    const canDelete = Auth.hasPermission(PERMISSIONS.DELETE_PILOT);
+    const canEdit = Auth.hasAnyPermission(
+      PERMISSIONS.MANAGE_PILOT_BASIC,
+      PERMISSIONS.MANAGE_PILOT_LICENSE,
+      PERMISSIONS.MANAGE_PILOT_MEDICAL
+    );
+
+    let html = `
+      <div class="stats-grid" id="pilotStatsGrid">
+        <div class="stat-card">
+          <div class="stat-icon">👨‍✈️</div>
+          <div class="stat-content">
+            <div class="stat-label">Total Pilotos</div>
+            <div class="stat-value">-</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📜</div>
+          <div class="stat-content">
+            <div class="stat-label">Licencias Vencidas</div>
+            <div class="stat-value">-</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🏥</div>
+          <div class="stat-content">
+            <div class="stat-label">Médicos Vigentes</div>
+            <div class="stat-value">-</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">⚠️</div>
+          <div class="stat-content">
+            <div class="stat-label">Alertas</div>
+            <div class="stat-value">-</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="search-bar">
+        <input type="text" class="form-input search-input" id="pilotSearch" placeholder="🔍 Buscar por nombre o cédula..." onkeypress="if(event.key==='Enter') Pilots.searchPilot()">
+        <button class="btn btn-secondary" onclick="Pilots.searchPilot()">🔍 Buscar</button>
+        <button class="btn btn-secondary" onclick="Pilots.clearSearch()" style="margin-left: 5px;">✕ Limpiar</button>
+        ${canCreate ? '<button class="btn btn-primary" onclick="Pilots.showCreateModal()">➕ Nuevo Piloto</button>' : ''}
+      </div>
+
+      <div class="table-container">
+        <table class="table bordered-table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>ID</th>
+              <th>Licencia</th>
+              <th>Vencimiento</th>
+              <th>Certificado Médico</th>
+              <th>Vencimiento</th>
+              <th>Habilitaciones</th>
+              <th>Fecha de Vencimiento</th>
+              ${canEdit || canDelete ? '<th>Acciones</th>' : ''}
+            </tr>
+          </thead>
+          <tbody id="pilotTableBody">
+            <tr><td colspan="9" style="text-align: center;">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    setTimeout(async () => {
+      const [pilots, stats] = await Promise.all([this.getAll(), this.getStats()]);
+
+      // Calculate stats client-side to ensure consistency and handle stale server response
+      const clientStats = {
+        total: pilots.length,
+        expiredLicense: pilots.filter(p => this.getCertStatus(p.license_expiry).status === 'expired').length,
+        expiredMedical: pilots.filter(p => this.getCertStatus(p.medical_expiry).status === 'expired').length,
+        expiredRatings: 0,
+        alerts: 0 // Will be calculated below
+      };
+
+      // Calculate expired ratings: Count pilots with at least one expired rating
+      clientStats.expiredRatings = pilots.filter(p => {
+        const ratingInfo = this.getClosestRatingExpiry(p);
+        return ratingInfo.status.status === 'expired';
+      }).length;
+
+      // Calculate alerts: Count unique pilots that have expired license OR medical OR ratings
+      clientStats.alerts = pilots.filter(p => {
+        const hasExpiredLicense = this.getCertStatus(p.license_expiry).status === 'expired';
+        const hasExpiredMedical = this.getCertStatus(p.medical_expiry).status === 'expired';
+        const ratingInfo = this.getClosestRatingExpiry(p);
+        const hasExpiredRatings = ratingInfo.status.status === 'expired';
+        return hasExpiredLicense || hasExpiredMedical || hasExpiredRatings;
+      }).length;
+
+      // Use client stats directly for the module view to ensure consistency with the table
+      // This ignores the server stats response which might be stale or calculated differently
+      const finalStats = clientStats;
+
+      const statsGrid = document.getElementById('pilotStatsGrid');
+      if (statsGrid) {
+        statsGrid.innerHTML = `
+          <div class="stat-card clickable-card" onclick="Pilots.filterPilotsByType('all')" title="Click para ver todos los pilotos">
+            <div class="stat-icon">👨‍✈️</div>
+            <div class="stat-content">
+              <div class="stat-label">Total Pilotos</div>
+              <div class="stat-value">${finalStats.total}</div>
+            </div>
+          </div>
+          <div class="stat-card clickable-card" onclick="Pilots.filterPilotsByType('license')" title="Click para filtrar licencias vencidas">
+            <div class="stat-icon">📜</div>
+            <div class="stat-content">
+              <div class="stat-label">Licencias Vencidas</div>
+              <div class="stat-value">${finalStats.expiredLicense}</div>
+            </div>
+          </div>
+          <div class="stat-card clickable-card" onclick="Pilots.filterPilotsByType('medical')" title="Click para filtrar médicos vencidos">
+            <div class="stat-icon">🏥</div>
+            <div class="stat-content">
+              <div class="stat-label">Médicos Vencidos</div>
+              <div class="stat-value">${finalStats.expiredMedical}</div>
+            </div>
+          </div>
+          <div class="stat-card clickable-card" onclick="Pilots.filterPilotsByType('ratings')" title="Click para filtrar habilitaciones vencidas">
+            <div class="stat-icon">✈️</div>
+            <div class="stat-content">
+              <div class="stat-label">Habilitaciones Vencidas</div>
+              <div class="stat-value">${finalStats.expiredRatings}</div>
+            </div>
+          </div>
+          <div class="stat-card clickable-card" onclick="Pilots.filterPilotsByType('alerts')" title="Click para filtrar alertas">
+            <div class="stat-icon">⚠️</div>
+            <div class="stat-content">
+              <div class="stat-label">Alertas</div>
+              <div class="stat-value">${finalStats.alerts}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      this.displayFilteredPilots(pilots);
+    }, 0);
+
+    return html;
+  },
+
+  // Show view modal with all pilot information
+  async showViewModal(pilotId) {
+    const pilot = (await this.getAll()).find(p => p.id === pilotId);
+    if (!pilot) return;
+
+    const licenseStatus = this.getCertStatus(pilot.license_expiry);
+    const medicalStatus = this.getCertStatus(pilot.medical_expiry);
+
+    // Función para abrir WhatsApp
+    const whatsappLink = pilot.phone ?
+      `https://wa.me/${pilot.phone.replace(/[^0-9]/g, '')}` : '#';
+
+    const modal = `
+      <div class="modal-overlay" id="pilotViewModal">
+        <div class="modal">
+          <div class="modal-header">
+            <h3 class="modal-title">👨‍✈️ Información del Piloto</h3>
+            <button class="modal-close" onclick="App.closeModal('pilotViewModal')">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="pilot-info-grid">
+              <div class="info-section">
+                <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">📋 Información Personal</h4>
+                <div class="info-item">
+                  <span class="info-label">Nombre:</span>
+                  <span class="info-value"><strong>${pilot.name}</strong></span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Cédula:</span>
+                  <span class="info-value">${pilot.id_number}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Email:</span>
+                  <span class="info-value">${pilot.email || '-'}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Teléfono:</span>
+                  <span class="info-value">
+                    ${pilot.phone || '-'}
+                    ${pilot.phone ? `
+                      <a href="${whatsappLink}" target="_blank" class="btn btn-sm btn-success" style="margin-left: 10px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle;">
+                          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.890-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                        </svg>
+                        WhatsApp
+                      </a>
+                    ` : ''}
+                  </span>
+                </div>
+              </div>
+
+              <div class="info-section">
+                <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">📜 Licencia de Piloto</h4>
+                <div class="info-item">
+                  <span class="info-label">Número de Licencia:</span>
+                  <span class="info-value"><strong>${pilot.license_number}</strong></span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Tipo:</span>
+                  <span class="info-value">${pilot.license_type === 'PPL' ? 'PPL - Piloto Privado' : pilot.license_type === 'CPL' ? 'CPL - Piloto Comercial' : 'ATPL - Piloto de Transporte'}</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Vencimiento:</span>
+                  <span class="info-value">
+                    ${pilot.license_expiry}
+                    <span class="badge ${licenseStatus.class}" style="margin-left: 10px;">${licenseStatus.text}</span>
+                  </span>
+                </div>
+              </div>
+
+              <div class="info-section">
+                <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">🏥 Certificado Médico</h4>
+                <div class="info-item">
+                  <span class="info-label">Certificado:</span>
+                  <span class="info-value"><strong>${pilot.medical_cert}</strong></span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">Vencimiento:</span>
+                  <span class="info-value">
+                    ${pilot.medical_expiry}
+                    <span class="badge ${medicalStatus.class}" style="margin-left: 10px;">${medicalStatus.text}</span>
+                  </span>
+                </div>
+              </div>
+              
+              <!-- Habilitaciones por Tipo de Aeronave -->
+              ${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].some(i => pilot['aircraft_rating_' + i]) ? `
+                <div class="info-section">
+                  <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">✈️ Habilitaciones por Tipo de Aeronave</h4>
+                  ${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => {
+      if (!pilot['aircraft_rating_' + i]) return '';
+      const ratingStatus = this.getCertStatus(pilot['aircraft_rating_' + i + '_expiry']);
+      return `
+                      <div class="info-item">
+                        <span class="info-label">${pilot['aircraft_rating_' + i]}${pilot['aircraft_rating_' + i + '_function'] ? ` (${pilot['aircraft_rating_' + i + '_function']})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot['aircraft_rating_' + i + '_expiry'] || 'Sin fecha'}
+                          ${pilot['aircraft_rating_' + i + '_expiry'] ? `<span class="badge ${ratingStatus.class}" style="margin-left: 10px;">${ratingStatus.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+    }).join('')}
+                </div>
+              ` : ''}
+              
+              <!-- Otras Habilitaciones -->
+              ${pilot.ifr_rating || pilot.language_proficiency || pilot.night_rating || pilot.multi_engine_rating || pilot.formation_rating || pilot.instructor_rating || pilot.other_rating || pilot.other_rating_2 || pilot.other_rating_3 || pilot.other_rating_4 ? `
+                <div class="info-section">
+                  <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">📋 Otras Habilitaciones</h4>
+                  ${pilot.ifr_rating ? (() => {
+          const status = this.getCertStatus(pilot.ifr_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">IFR${pilot.ifr_rating_obs ? ` (${pilot.ifr_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.ifr_rating_expiry || 'Sin fecha'}
+                          ${pilot.ifr_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.language_proficiency ? (() => {
+          const status = this.getCertStatus(pilot.language_proficiency_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Comp. Lingüística${pilot.language_proficiency_obs ? ` (${pilot.language_proficiency_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.language_proficiency_expiry || 'Sin fecha'}
+                          ${pilot.language_proficiency_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.night_rating ? (() => {
+          const status = this.getCertStatus(pilot.night_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Vuelo Nocturno${pilot.night_rating_obs ? ` (${pilot.night_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.night_rating_expiry || 'Sin fecha'}
+                          ${pilot.night_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.multi_engine_rating ? (() => {
+          const status = this.getCertStatus(pilot.multi_engine_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Multi-Motor${pilot.multi_engine_rating_obs ? ` (${pilot.multi_engine_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.multi_engine_rating_expiry || 'Sin fecha'}
+                          ${pilot.multi_engine_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.formation_rating ? (() => {
+          const status = this.getCertStatus(pilot.formation_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Formación${pilot.formation_rating_obs ? ` (${pilot.formation_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.formation_rating_expiry || 'Sin fecha'}
+                          ${pilot.formation_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.instructor_rating ? (() => {
+          const status = this.getCertStatus(pilot.instructor_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Instructor${pilot.instructor_rating_obs ? ` (${pilot.instructor_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.instructor_rating_expiry || 'Sin fecha'}
+                          ${pilot.instructor_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.other_rating ? (() => {
+          const status = this.getCertStatus(pilot.other_rating_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Otra${pilot.other_rating_obs ? ` (${pilot.other_rating_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.other_rating_expiry || 'Sin fecha'}
+                          ${pilot.other_rating_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.other_rating_2 ? (() => {
+          const status = this.getCertStatus(pilot.other_rating_2_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Otra 2${pilot.other_rating_2_obs ? ` (${pilot.other_rating_2_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.other_rating_2_expiry || 'Sin fecha'}
+                          ${pilot.other_rating_2_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.other_rating_3 ? (() => {
+          const status = this.getCertStatus(pilot.other_rating_3_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Otra 3${pilot.other_rating_3_obs ? ` (${pilot.other_rating_3_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.other_rating_3_expiry || 'Sin fecha'}
+                          ${pilot.other_rating_3_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                  ${pilot.other_rating_4 ? (() => {
+          const status = this.getCertStatus(pilot.other_rating_4_expiry);
+          return `
+                      <div class="info-item">
+                        <span class="info-label">Otra 4${pilot.other_rating_4_obs ? ` (${pilot.other_rating_4_obs})` : ''}:</span>
+                        <span class="info-value">
+                          ${pilot.other_rating_4_expiry || 'Sin fecha'}
+                          ${pilot.other_rating_4_expiry ? `<span class="badge ${status.class}" style="margin-left: 10px;">${status.text}</span>` : ''}
+                        </span>
+                      </div>
+                    `;
+        })() : ''}
+                </div>
+              ` : ''}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="App.closeModal('pilotViewModal')">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modal);
+  },
+
+  // Show create modal
+  showCreateModal() {
+    const modal = `
+      <div class="modal-overlay" id="pilotModal">
+        <div class="modal">
+                <div class="modal-header">
+                  <h3 class="modal-title">Registrar Nuevo Piloto</h3>
+                  <button class="modal-close" onclick="App.closeModal('pilotModal')">✕</button>
+                </div>
+                <div class="modal-body">
+                  <form id="pilotForm" onsubmit="Pilots.handleSubmit(event)">
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label class="form-label">Nombre Completo *</label>
+                        <input type="text" class="form-input" name="name" required>
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Número de Identificación *</label>
+                        <input type="text" class="form-input" name="id_number" required>
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-input" name="email">
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Teléfono</label>
+                        <input type="tel" class="form-input" name="phone">
+                      </div>
+                    </div>
+                    <div class="form-row" style="grid-template-columns: 1fr auto 1fr;">
+                      <div class="form-group">
+                        <label class="form-label">Número de Licencia *</label>
+                        <input type="text" class="form-input" name="license_number" required>
+                      </div>
+                      <div class="form-group" style="min-width: 100px; max-width: 120px;">
+                        <label class="form-label">Tipo *</label>
+                        <select class="form-select license-type-select" name="license_type" required>
+                          <option value="PPL">PPL - Piloto Privado</option>
+                          <option value="CPL">CPL - Piloto Comercial</option>
+                          <option value="ATPL">ATPL - Piloto de Transporte</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Vencimiento *</label>
+                        <input type="date" class="form-input" name="license_expiry" required>
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label class="form-label">Certificado Médico *</label>
+                        <input type="text" class="form-input" name="medical_cert" required>
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Fecha de Vencimiento *</label>
+                        <input type="date" class="form-input" name="medical_expiry" required>
+                      </div>
+                    </div>
+
+                    <!--Sección de Habilitaciones Colapsable -->
+                    <div class="ratings-section">
+                      <button type="button" class="ratings-toggle" onclick="this.parentElement.classList.toggle('expanded')">
+                        <span class="toggle-icon">▶</span>
+                        <span style="font-weight: 600;">✈️ Habilitaciones (Opcional)</span>
+                        <span style="font-size: 0.85em; color: var(--text-muted); margin-left: auto;">Click para expandir</span>
+                      </button>
+
+                      <div class="ratings-content">
+                        <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">✈️ Habilitaciones por Tipo de Aeronave</h4>
+                        <div class="ratings-grid" style="grid-template-columns: 1fr auto 1fr;">
+                          <div class="rating-item"><label class="form-label">Tipo 1</label><input type="text" class="form-input" name="aircraft_rating_1" placeholder="ej: Cessna 172"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_1_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_1_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 2</label><input type="text" class="form-input" name="aircraft_rating_2" placeholder="ej: PA-28"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_2_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_2_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 3</label><input type="text" class="form-input" name="aircraft_rating_3"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_3_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_3_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 4</label><input type="text" class="form-input" name="aircraft_rating_4"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_4_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_4_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 5</label><input type="text" class="form-input" name="aircraft_rating_5"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_5_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_5_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 6</label><input type="text" class="form-input" name="aircraft_rating_6"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_6_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_6_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 7</label><input type="text" class="form-input" name="aircraft_rating_7"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_7_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_7_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 8</label><input type="text" class="form-input" name="aircraft_rating_8"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_8_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_8_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 9</label><input type="text" class="form-input" name="aircraft_rating_9"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_9_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_9_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Tipo 10</label><input type="text" class="form-input" name="aircraft_rating_10"></div>
+                          <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_10_function"><option value="">-</option><option value="PIC">PIC</option><option value="SIC">SIC</option><option value="Instructor">Instructor</option></select></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_10_expiry"></div>
+                        </div>
+
+                        <h4 style="margin: var(--spacing-xl) 0 var(--spacing-md); color: var(--primary-color);">📋 Otras Habilitaciones</h4>
+                        <div class="ratings-grid" style="grid-template-columns: 1fr 1fr auto;">
+                          <div class="rating-item"><label class="form-label">IFR</label><input type="text" class="form-input" name="ifr_rating" placeholder="Certificado"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="ifr_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="ifr_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Comp. Lingüística</label><input type="text" class="form-input" name="language_proficiency" placeholder="Nivel"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="language_proficiency_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="language_proficiency_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Vuelo Nocturno</label><input type="text" class="form-input" name="night_rating"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="night_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="night_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Multi-Motor</label><input type="text" class="form-input" name="multi_engine_rating"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="multi_engine_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="multi_engine_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Formación</label><input type="text" class="form-input" name="formation_rating"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="formation_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="formation_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Instructor</label><input type="text" class="form-input" name="instructor_rating"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="instructor_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="instructor_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Otra</label><input type="text" class="form-input" name="other_rating"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Otra 2</label><input type="text" class="form-input" name="other_rating_2"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_2_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_2_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Otra 3</label><input type="text" class="form-input" name="other_rating_3"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_3_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_3_expiry"></div>
+                          <div class="rating-item"><label class="form-label">Otra 4</label><input type="text" class="form-input" name="other_rating_4"></div>
+                          <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_4_obs"></div>
+                          <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_4_expiry"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+                <div class="modal-footer">
+                  <button class="btn btn-secondary" onclick="App.closeModal('pilotModal')">Cancelar</button>
+                  <button class="btn btn-primary" onclick="document.getElementById('pilotForm').requestSubmit()">Registrar Piloto</button>
+                </div>
+              </div>
+      </div >
+  `;
+
+    document.body.insertAdjacentHTML('beforeend', modal);
+  },
+
+  // Show edit modal
+  async showEditModal(pilotId) {
+    const pilot = (await this.getAll()).find(p => p.id === pilotId);
+    if (!pilot) return;
+
+    const canManageBasic = Auth.hasPermission(PERMISSIONS.MANAGE_PILOT_BASIC);
+    const canManageLicense = Auth.hasPermission(PERMISSIONS.MANAGE_PILOT_LICENSE);
+    const canManageMedical = Auth.hasPermission(PERMISSIONS.MANAGE_PILOT_MEDICAL);
+
+    const modal = `
+      <div class="modal-overlay" id="pilotModal">
+        <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">Editar Piloto</h3>
+        <button class="modal-close" onclick="App.closeModal('pilotModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="pilotForm" onsubmit="Pilots.handleSubmit(event, ${pilotId})">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Nombre Completo</label>
+              <input type="text" class="form-input" name="name" value="${pilot.name}" required ${!canManageBasic ? 'disabled' : ''}>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Número de Identificación</label>
+              <input type="text" class="form-input" name="id_number" value="${pilot.id_number}" required ${!canManageBasic ? 'disabled' : ''}>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Email</label>
+              <input type="email" class="form-input" name="email" value="${pilot.email || ''}" ${!canManageBasic ? 'disabled' : ''}>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Teléfono</label>
+              <input type="tel" class="form-input" name="phone" value="${pilot.phone || ''}" ${!canManageBasic ? 'disabled' : ''}>
+            </div>
+          </div>
+          <div class="form-row" style="grid-template-columns: 1fr auto 1fr;">
+            <div class="form-group">
+              <label class="form-label">Número de Licencia</label>
+              <input type="text" class="form-input" name="license_number" value="${pilot.license_number}" required ${!canManageLicense ? 'disabled' : ''}>
+            </div>
+            <div class="form-group" style="min-width: 100px; max-width: 120px;">
+              <label class="form-label">Tipo</label>
+              <select class="form-select license-type-select" name="license_type" required ${!canManageLicense ? 'disabled' : ''}>
+                <option value="PPL" ${pilot.license_type === 'PPL' ? 'selected' : ''}>PPL - Piloto Privado</option>
+                <option value="CPL" ${pilot.license_type === 'CPL' ? 'selected' : ''}>CPL - Piloto Comercial</option>
+                <option value="ATPL" ${pilot.license_type === 'ATPL' ? 'selected' : ''}>ATPL - Piloto de Transporte</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Vencimiento</label>
+              <input type="date" class="form-input" name="license_expiry" value="${pilot.license_expiry}" required ${!canManageLicense ? 'disabled' : ''}>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Certificado Médico</label>
+              <input type="text" class="form-input" name="medical_cert" value="${pilot.medical_cert}" required ${!canManageMedical ? 'disabled' : ''}>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Fecha de Vencimiento</label>
+              <input type="date" class="form-input" name="medical_expiry" value="${pilot.medical_expiry}" required ${!canManageMedical ? 'disabled' : ''}>
+            </div>
+          </div>
+
+          <!-- Sección de Habilitaciones Colapsable -->
+          <div class="ratings-section">
+            <button type="button" class="ratings-toggle" onclick="this.parentElement.classList.toggle('expanded')">
+              <span class="toggle-icon">▶</span>
+              <span style="font-weight: 600;">✈️ Habilitaciones (Opcional)</span>
+              <span style="font-size: 0.85em; color: var(--text-muted); margin-left: auto;">Click para expandir</span>
+            </button>
+
+            <div class="ratings-content">
+              <h4 style="margin-bottom: var(--spacing-md); color: var(--primary-color);">✈️ Habilitaciones por Tipo de Aeronave</h4>
+              <div class="ratings-grid" style="grid-template-columns: 1fr auto 1fr;">
+                ${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => `
+                      <div class="rating-item"><label class="form-label">Tipo ${i}</label><input type="text" class="form-input" name="aircraft_rating_${i}" value="${pilot['aircraft_rating_' + i] || ''}" placeholder="ej: Cessna 172"></div>
+                      <div class="rating-item"><label class="form-label">Función</label><select class="form-select" name="aircraft_rating_${i}_function"><option value="">-</option><option value="PIC" ${pilot['aircraft_rating_' + i + '_function'] === 'PIC' ? 'selected' : ''}>PIC</option><option value="SIC" ${pilot['aircraft_rating_' + i + '_function'] === 'SIC' ? 'selected' : ''}>SIC</option><option value="Instructor" ${pilot['aircraft_rating_' + i + '_function'] === 'Instructor' ? 'selected' : ''}>Instructor</option></select></div>
+                      <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="aircraft_rating_${i}_expiry" value="${pilot['aircraft_rating_' + i + '_expiry'] || ''}"></div>
+                    `).join('')}
+              </div>
+
+              <h4 style="margin: var(--spacing-xl) 0 var(--spacing-md); color: var(--primary-color);">📋 Otras Habilitaciones</h4>
+              <div class="ratings-grid" style="grid-template-columns: 1fr 1fr auto;">
+                <div class="rating-item"><label class="form-label">IFR</label><input type="text" class="form-input" name="ifr_rating" value="${pilot.ifr_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="ifr_rating_obs" value="${pilot.ifr_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="ifr_rating_expiry" value="${pilot.ifr_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Comp. Lingüística</label><input type="text" class="form-input" name="language_proficiency" value="${pilot.language_proficiency || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="language_proficiency_obs" value="${pilot.language_proficiency_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="language_proficiency_expiry" value="${pilot.language_proficiency_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vuelo Nocturno</label><input type="text" class="form-input" name="night_rating" value="${pilot.night_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="night_rating_obs" value="${pilot.night_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="night_rating_expiry" value="${pilot.night_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Multi-Motor</label><input type="text" class="form-input" name="multi_engine_rating" value="${pilot.multi_engine_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="multi_engine_rating_obs" value="${pilot.multi_engine_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="multi_engine_rating_expiry" value="${pilot.multi_engine_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Formación</label><input type="text" class="form-input" name="formation_rating" value="${pilot.formation_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="formation_rating_obs" value="${pilot.formation_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="formation_rating_expiry" value="${pilot.formation_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Instructor</label><input type="text" class="form-input" name="instructor_rating" value="${pilot.instructor_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="instructor_rating_obs" value="${pilot.instructor_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="instructor_rating_expiry" value="${pilot.instructor_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Otra</label><input type="text" class="form-input" name="other_rating" value="${pilot.other_rating || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_obs" value="${pilot.other_rating_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_expiry" value="${pilot.other_rating_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Otra 2</label><input type="text" class="form-input" name="other_rating_2" value="${pilot.other_rating_2 || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_2_obs" value="${pilot.other_rating_2_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_2_expiry" value="${pilot.other_rating_2_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Otra 3</label><input type="text" class="form-input" name="other_rating_3" value="${pilot.other_rating_3 || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_3_obs" value="${pilot.other_rating_3_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_3_expiry" value="${pilot.other_rating_3_expiry || ''}"></div>
+                <div class="rating-item"><label class="form-label">Otra 4</label><input type="text" class="form-input" name="other_rating_4" value="${pilot.other_rating_4 || ''}"></div>
+                <div class="rating-item"><label class="form-label">Observación</label><input type="text" class="form-input" name="other_rating_4_obs" value="${pilot.other_rating_4_obs || ''}"></div>
+                <div class="rating-item"><label class="form-label">Vencimiento</label><input type="date" class="form-input" name="other_rating_4_expiry" value="${pilot.other_rating_4_expiry || ''}"></div>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="App.closeModal('pilotModal')">Cancelar</button>
+        <button class="btn btn-primary" onclick="document.getElementById('pilotForm').requestSubmit()">Guardar Cambios</button>
+      </div>
+    </div>
+      </div >
+  `;
+
+    document.body.insertAdjacentHTML('beforeend', modal);
+  },
+
+  // Handle form submit
+  async handleSubmit(event, pilotId = null) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const data = Object.fromEntries(formData.entries());
+
+    let result;
+    if (pilotId) {
+      result = await this.update(pilotId, data);
+    } else {
+      result = await this.create(data);
+    }
+
+    if (result.success) {
+      App.closeModal('pilotModal');
+      App.showAlert('success', pilotId ? 'Piloto actualizado correctamente' : 'Piloto registrado correctamente');
+      App.navigate('pilots');
+    } else {
+      App.showAlert('danger', result.message);
+    }
+  },
+
+  // Confirm delete
+  async confirmDelete(pilotId) {
+    const pilot = (await this.getAll()).find(p => p.id === pilotId);
+    if (!pilot) return;
+
+    if (confirm(`¿Estás seguro de eliminar al piloto "${pilot.name}" ? `)) {
+      const result = await this.delete(pilotId);
+      if (result.success) {
+        App.showAlert('success', 'Piloto eliminado correctamente');
+        App.navigate('pilots');
+      } else {
+        App.showAlert('danger', result.message);
+      }
+    }
+  }
+};

@@ -1,0 +1,129 @@
+/* =============================================
+   AUDIT LOGS - DEDICATED STYLES OVERRIDE
+   This file is loaded AFTER styles.css to force correct layout
+   ============================================= */
+
+/* ------------------------------------------------
+   1. DESKTOP RESET (Min width 769px)
+   Force table to be full width and standard layout
+   ------------------------------------------------- */
+@media (min-width: 769px) {
+    /* Target specifically the audit page table */
+    #auditLogsTableBody,
+    #auditLogsTableBody tr,
+    #auditLogsTableBody td {
+        display: table-row !important;
+    }
+    
+    #auditLogsTableBody td {
+        display: table-cell !important;
+    }
+
+    /* Force the table itself */
+    .audit-page table,
+    table.bordered-table {
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+        table-layout: auto !important;
+        display: table !important;
+        border-collapse: collapse !important;
+    }
+
+    /* Reset cells */
+    .audit-page th, 
+    .audit-page td {
+        width: auto !important; 
+        min-width: 0 !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-align: left !important;
+    }
+
+    /* Container reset */
+    .audit-page .table-container {
+        overflow-x: visible !important;
+        width: 100% !important;
+        display: block !important;
+    }
+    
+    /* Reset Buttons to row for desktop */
+    .export-buttons-grid {
+        display: flex !important;
+        justify-content: flex-start !important;
+        gap: 10px !important;
+    }
+    
+    .export-card {
+        height: auto !important;
+        padding: 8px 16px !important; 
+        min-width: auto !important;
+        flex-direction: row !important;
+        gap: 8px !important;
+    }
+    
+    .export-icon {
+        font-size: 1rem !important;
+        margin-bottom: 0 !important;
+    }
+}
+
+/* ------------------------------------------------
+   2. MOBILE STYLES (Max width 768px)
+   Force horizontal scroll and fixed column widths
+   ------------------------------------------------- */
+@media (max-width: 768px) {
+    /* Container allows scroll */
+    .audit-page .table-container {
+        width: 100% !important;
+        overflow-x: auto !important;
+        display: block !important;
+        -webkit-overflow-scrolling: touch;
+        margin-bottom: 15px;
+    }
+    
+    /* Table is WIDE */
+    .audit-page table {
+        min-width: 900px !important;
+        width: 900px !important;
+        table-layout: fixed !important; 
+        display: table !important;
+    }
+
+    /* Column Widths - CRITICAL for visibility */
+    .audit-page th:nth-child(1), .audit-page td:nth-child(1) { width: 140px !important; min-width: 140px !important; } /* Fecha */
+    .audit-page th:nth-child(2), .audit-page td:nth-child(2) { width: 100px !important; min-width: 100px !important; } /* Usuario */
+    .audit-page th:nth-child(3), .audit-page td:nth-child(3) { width: 100px !important; min-width: 100px !important; } /* Accion */
+    .audit-page th:nth-child(4), .audit-page td:nth-child(4) { width: 100px !important; min-width: 100px !important; } /* Recurso */
+    .audit-page th:nth-child(5), .audit-page td:nth-child(5) { width: 120px !important; min-width: 120px !important; } /* ID */
+    .audit-page th:nth-child(6), .audit-page td:nth-child(6) { width: 100px !important; min-width: 100px !important; } /* IP */
+    .audit-page th:nth-child(7), .audit-page td:nth-child(7) { width: 240px !important; min-width: 240px !important; } /* Detalles */
+
+    /* Cell styles */
+    .audit-page td {
+        display: table-cell !important; /* Ensure it's a cell not flex/block */
+        overflow: hidden !important;
+        white-space: normal !important;
+        text-align: center !important;
+        vertical-align: middle !important;
+        background-color: transparent !important;
+        color: var(--text-primary) !important;
+        border: 1px solid var(--border-color) !important;
+        padding: 5px !important;
+        visibility: visible !important; /* Force visible */
+        opacity: 1 !important;
+    }
+
+    /* Buttons Grid for Mobile */
+    .export-buttons-grid {
+        display: grid !important;
+        grid-template-columns: repeat(3, 1fr) !important;
+        gap: 10px !important;
+    }
+    
+    .export-card {
+        padding: 10px 5px !important;
+        height: 70px !important;
+        flex-direction: column !important;
+    }
+}

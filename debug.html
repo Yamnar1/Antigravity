@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Debug - VPFS</title>
+</head>
+
+<body>
+    <h1>Debug Info</h1>
+    <pre id="output"></pre>
+
+    <script src="permissions.js"></script>
+    <script src="api.js"></script>
+    <script src="auth.js"></script>
+
+    <script>
+        const output = document.getElementById('output');
+
+        function log(msg) {
+            output.textContent += msg + '\n';
+        }
+
+        log('=== DEBUG INFO ===\n');
+        log('1. Current User:');
+        log(JSON.stringify(Auth.getCurrentUser(), null, 2));
+        log('\n2. Is Authenticated: ' + Auth.isAuthenticated());
+        log('\n3. PERMISSIONS object exists: ' + (typeof PERMISSIONS !== 'undefined'));
+
+        if (typeof PERMISSIONS !== 'undefined') {
+            log('4. PERMISSIONS.MANAGE_USERS: ' + PERMISSIONS.MANAGE_USERS);
+            log('5. Has MANAGE_USERS permission: ' + Auth.hasPermission(PERMISSIONS.MANAGE_USERS));
+            log('6. Is Admin: ' + Auth.isAdmin());
+        } else {
+            log('ERROR: PERMISSIONS object not defined!');
+        }
+
+        log('\n7. LocalStorage authToken: ' + (localStorage.getItem('authToken') ? 'EXISTS' : 'NOT FOUND'));
+        log('8. LocalStorage currentUser: ' + (localStorage.getItem('currentUser') ? 'EXISTS' : 'NOT FOUND'));
+    </script>
+</body>
+
+</html>
